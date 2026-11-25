@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { textToSignSequence } from '../data/dictionary.js';
 
 export default function Translator({ onNotify }) {
-  const [text, setText] = useState('أنا حب الجميع');
+  const [text, setText] = useState('');
   const [speed, setSpeed] = useState(1.5); // السرعة الافتراضية 1.5x
   const [isListening, setIsListening] = useState(false);
 
