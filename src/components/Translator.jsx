@@ -5,6 +5,10 @@ export default function Translator({ onNotify }) {
   const [text, setText] = useState('أنا حب الجميع');
   const [speed, setSpeed] = useState(1.5); // السرعة الافتراضية 1.5x
   const [isListening, setIsListening] = useState(false);
+
+  // حالات المحرك الهجين (دمج سيرفر + تشغيل فوري كلاينت على Vercel)
+  const [sequence, setSequence] = useState([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
   const [mergedUrl, setMergedUrl] = useState(null);
   const [loading, setLoading] = useState(false);
   const [mergeDuration, setMergeDuration] = useState(null);
@@ -22,14 +26,14 @@ export default function Translator({ onNotify }) {
   const mergeStartRef = useRef(null);
   const hideControlsTimerRef = useRef(null);
 
-  // تحديث سرعة الفيديو عند تغيرها أو تحميل فيديو جديد
+  // تحديث سرعة الفيديو عند تغيرها أو الانتقال بين المقاطع
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.playbackRate = speed;
     }
-  }, [speed, mergedUrl]);
+  }, [speed, mergedUrl, currentIndex]);
 
-  // إخفاء شريط التحكم تلقائياً بعد فترة عند التشغيل
+  // إخفاء شريط التحكم تلقائياً بعد فترة أثناء التشغيل
   const handleMouseMove = () => {
     setShowControls(true);
     if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
@@ -65,38 +69,54 @@ export default function Translator({ onNotify }) {
       return;
     }
 
-    const clips = seq.map((item) => `${item.token}.mp4`);
-
     setLoading(true);
     setMergedUrl(null);
+    setSequence(seq);
+    setCurrentIndex(0);
     setMergeDuration(null);
     setIsEnded(false);
     setIsPlaying(false);
     mergeStartRef.current = Date.now();
 
+    // 1. محاولة طلب الدمج من سيرفر الـ Backend إن وُجد
+    const clips = seq.map((item) => `${item.token}.mp4`);
+    let serverSuccess = false;
+
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500); // مهلة سريعة حتى لا يعلق المتصفح
+
       const res = await fetch('/api/merge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clips })
+        body: JSON.stringify({ clips }),
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
 
-      if (!res.ok) throw new Error('فشل دمج الفيديو');
-
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const elapsed = ((Date.now() - mergeStartRef.current) / 1000).toFixed(2);
-
-      setMergedUrl(url);
-      setMergeDuration(elapsed);
-      setIsEnded(false);
-      onNotify(`✅ تم تجهيز الفيديو المدمج (${seq.length} إشارة) في ${elapsed} ثانية!`);
-    } catch (err) {
-      console.error(err);
-      onNotify('حدث خطأ أثناء دمج الفيديوهات. تأكد أن السيرفر شغال.', true);
-    } finally {
-      setLoading(false);
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const elapsed = ((Date.now() - mergeStartRef.current) / 1000).toFixed(2);
+        setMergedUrl(url);
+        setMergeDuration(elapsed);
+        serverSuccess = true;
+        onNotify(`✅ تم تجهيز الفيديو المدمج (${seq.length} إشارة) في ${elapsed} ثانية!`);
+      }
+    } catch {
+      serverSuccess = false;
     }
+
+    // 2. Fallback تلقائي وفوري للكلاينت (يعمل 100% على Vercel وأي استضافة ثابتة وبدون أخطاء 404)
+    if (!serverSuccess) {
+      setMergedUrl(null);
+      setMergeDuration('0.0');
+      setIsEnded(false);
+      setIsPlaying(true);
+      onNotify(`✨ تم تجهيز ${seq.length} إشارة وتشغيلها بسرعة ${speed}x فوراً!`);
+    }
+
+    setLoading(false);
   };
 
   // تشغيل / إيقاف مؤقت
@@ -109,14 +129,19 @@ export default function Translator({ onNotify }) {
     if (isPlaying) {
       videoRef.current.pause();
     } else {
-      videoRef.current.play();
+      videoRef.current.play().catch(() => {});
     }
   };
 
   // إعادة التشغيل من البداية
   const handleReplay = () => {
     if (videoRef.current) {
-      videoRef.current.currentTime = 0;
+      if (mergedUrl) {
+        videoRef.current.currentTime = 0;
+      } else {
+        setCurrentIndex(0);
+        videoRef.current.currentTime = 0;
+      }
       videoRef.current.playbackRate = speed;
       videoRef.current.play().then(() => {
         setIsPlaying(true);
@@ -125,19 +150,46 @@ export default function Translator({ onNotify }) {
     }
   };
 
+  // عند انتهاء مقطع الفيديو
+  const handleVideoEnded = () => {
+    if (mergedUrl) {
+      setIsPlaying(false);
+      setIsEnded(true);
+      setShowControls(true);
+    } else {
+      // تشغيل المقطع التالي في التسلسل
+      if (currentIndex < sequence.length - 1) {
+        setCurrentIndex((prev) => prev + 1);
+      } else {
+        setIsPlaying(false);
+        setIsEnded(true);
+        setShowControls(true);
+      }
+    }
+  };
+
   // تقديم وتأخير عبر شريط التقدم
   const handleSeek = (e) => {
     const seekTime = parseFloat(e.target.value);
     if (videoRef.current) {
-      videoRef.current.currentTime = seekTime;
-      setCurrentTime(seekTime);
-      if (isEnded && seekTime < duration) {
+      if (mergedUrl) {
+        videoRef.current.currentTime = seekTime;
+        setCurrentTime(seekTime);
+      } else if (sequence.length > 0) {
+        // حساب المقطع المقابل للموقع المطلوب
+        const targetIndex = Math.min(
+          Math.floor((seekTime / (duration || 1)) * sequence.length),
+          sequence.length - 1
+        );
+        setCurrentIndex(targetIndex);
+      }
+      if (isEnded) {
         setIsEnded(false);
       }
     }
   };
 
-  // تغيير السرعة من قائمة الإعدادات
+  // تغيير السرعة
   const handleSpeedSelect = (s) => {
     setSpeed(s);
     if (videoRef.current) {
@@ -158,7 +210,7 @@ export default function Translator({ onNotify }) {
     }
   };
 
-  // تنسيق الوقت (ثوانٍ ودقائق)
+  // تنسيق الوقت
   const formatTime = (secs) => {
     if (isNaN(secs) || secs < 0) return '00:00';
     const m = Math.floor(secs / 60);
@@ -205,6 +257,12 @@ export default function Translator({ onNotify }) {
     handleConvert(sample);
   };
 
+  // تحديد مسار الفيديو الحالي
+  const activeVideoSrc = mergedUrl || (sequence[currentIndex] ? sequence[currentIndex].video : null);
+  const activeProgress = mergedUrl
+    ? duration > 0 ? (currentTime / duration) * 100 : 0
+    : sequence.length > 0 ? ((currentIndex + 1) / sequence.length) * 100 : 0;
+
   return (
     <section className="translator-section" id="translate">
       <div className="container">
@@ -214,7 +272,7 @@ export default function Translator({ onNotify }) {
             أكتب النص بالعربي وشاهد سحر <span>شاور !!</span> في تحويله إلى فيديو بلغة الإشارة
           </h2>
           <p className="section-desc">
-            أدخل أي عبارة عربية أو تحدث بالصوت، وسيقوم النظام بدمج إشارات الكلمات والحروف في فيديو واحد متكامل وسلس.
+            أدخل أي عبارة عربية أو تحدث بالصوت، وسيقوم النظام بتشغيل إشارات الكلمات والحروف بدقة وسلاسة فائقة.
           </p>
         </div>
 
@@ -275,7 +333,7 @@ export default function Translator({ onNotify }) {
               onClick={() => handleConvert()}
               disabled={loading}
             >
-              <span>{loading ? 'جاري دمج الفيديو...' : 'حول النص الآن'}</span>
+              <span>{loading ? 'جاري التجهيز...' : 'حول النص الآن'}</span>
               <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z" />
               </svg>
@@ -287,11 +345,22 @@ export default function Translator({ onNotify }) {
             <div className="video-header">
               <h3>
                 <span>🤟</span>
-                <span>فيديو لغة الإشارة المدمج</span>
+                <span>مشغل لغة الإشارة</span>
               </h3>
-              <span className="badge-live" style={{ background: '#fff3eb', color: '#eb510f' }}>
-                {mergeDuration !== null ? `⏱ تم الدمج في ${mergeDuration} ثانية` : '⏱ في انتظار التحويل'}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span className="badge-live" style={{ background: '#fff3eb', color: '#eb510f' }}>
+                  {mergeDuration !== null
+                    ? mergeDuration === '0.0'
+                      ? '⚡ تشغيل فوري (0.0 ث)'
+                      : `⏱ تم الدمج في ${mergeDuration} ث`
+                    : '⏱ في انتظار التحويل'}
+                </span>
+                {!mergedUrl && sequence.length > 0 && (
+                  <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#10b981' }}>
+                    ({currentIndex + 1} من {sequence.length})
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* حاوية المشغل الفعلي */}
@@ -304,10 +373,10 @@ export default function Translator({ onNotify }) {
               {loading ? (
                 <div className="video-placeholder">
                   <div className="placeholder-icon spinner-icon">⏳</div>
-                  <h4>جاري معالجة ودمج إشارات الفيديو...</h4>
-                  <p>يتم تجميع المقاطع بدقة وسلاسة، يرجى الانتظار لحظات</p>
+                  <h4>جاري معالجة الإشارات...</h4>
+                  <p>يتم تجهيز المقاطع بأعلى دقة، لحظات قليلة</p>
                 </div>
-              ) : !mergedUrl ? (
+              ) : !activeVideoSrc ? (
                 <div className="video-placeholder">
                   <div className="placeholder-icon">
                     <svg viewBox="0 0 24 24">
@@ -315,13 +384,14 @@ export default function Translator({ onNotify }) {
                     </svg>
                   </div>
                   <h4>فيديو لغة الإشارة سيظهر هنا</h4>
-                  <p>أدخل نصك واضغط "حول النص الآن" لإنشاء الفيديو المدمج</p>
+                  <p>أدخل نصك واضغط "حول النص الآن" لمشاهدة الترجمة فورياً</p>
                 </div>
               ) : (
                 <div className="video-viewport">
                   <video
                     ref={videoRef}
-                    src={mergedUrl}
+                    key={activeVideoSrc}
+                    src={activeVideoSrc}
                     playsInline
                     autoPlay
                     onClick={togglePlay}
@@ -329,6 +399,7 @@ export default function Translator({ onNotify }) {
                       if (videoRef.current) {
                         videoRef.current.playbackRate = speed;
                         setDuration(videoRef.current.duration || 0);
+                        videoRef.current.play().catch(() => {});
                       }
                     }}
                     onTimeUpdate={() => {
@@ -341,16 +412,12 @@ export default function Translator({ onNotify }) {
                       setIsEnded(false);
                     }}
                     onPause={() => setIsPlaying(false)}
-                    onEnded={() => {
-                      setIsPlaying(false);
-                      setIsEnded(true);
-                      setShowControls(true);
-                    }}
+                    onEnded={handleVideoEnded}
                   >
                     متصفحك لا يدعم تشغيل الفيديو.
                   </video>
 
-                  {/* زر التشغيل الكبير في المنتصف عند الإيقاف المؤقت (ولا تظهر عند انتهاء الفيديو) */}
+                  {/* زر التشغيل الكبير في المنتصف عند الإيقاف المؤقت */}
                   {!isPlaying && !isEnded && (
                     <div className="center-play-overlay" onClick={togglePlay}>
                       <button type="button" className="center-play-btn" title="تشغيل">
@@ -361,14 +428,14 @@ export default function Translator({ onNotify }) {
                     </div>
                   )}
 
-                  {/* زر إعادة التشغيل كـ Overlay في المنتصف عند انتهاء الفيديو */}
+                  {/* زر إعادة التشغيل البسيط كـ Overlay في المنتصف عند انتهاء الفيديو */}
                   {isEnded && (
                     <div className="center-replay-overlay" onClick={handleReplay}>
                       <button
                         type="button"
                         className="center-replay-btn"
                         onClick={handleReplay}
-                        title="إعادة التشغيل"
+                        title="إعادة التشغيل من البداية"
                       >
                         <svg viewBox="0 0 24 24" width="36" height="36" fill="currentColor">
                           <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
@@ -379,7 +446,7 @@ export default function Translator({ onNotify }) {
 
                   {/* شريط التحكم السفلي المدمج والمطور داخل المشغل */}
                   <div className={`custom-video-controls ${showControls || !isPlaying || isEnded ? 'visible' : ''}`}>
-                    {/* شريط التقدم السلس (LTR حتى تتحرك النقطة مع الشريط في نفس الاتجاه) */}
+                    {/* شريط التقدم السلس LTR */}
                     <div className="progress-container" dir="ltr">
                       <input
                         dir="ltr"
@@ -391,11 +458,7 @@ export default function Translator({ onNotify }) {
                         onChange={handleSeek}
                         className="progress-slider"
                         style={{
-                          background: `linear-gradient(to right, #eb510f 0%, #eb510f ${
-                            duration > 0 ? (currentTime / duration) * 100 : 0
-                          }%, rgba(255,255,255,0.25) ${
-                            duration > 0 ? (currentTime / duration) * 100 : 0
-                          }%, rgba(255,255,255,0.25) 100%)`
+                          background: `linear-gradient(to right, #eb510f 0%, #eb510f ${activeProgress}%, rgba(255,255,255,0.25) ${activeProgress}%, rgba(255,255,255,0.25) 100%)`
                         }}
                       />
                     </div>
@@ -467,7 +530,7 @@ export default function Translator({ onNotify }) {
                                   className={`speed-option ${speed === s ? 'active' : ''}`}
                                   onClick={() => handleSpeedSelect(s)}
                                 >
-                                  <span>{s}x</span>
+                                  <span>{s}x {s === 1.5 ? '(افتراضي)' : ''}</span>
                                   {speed === s && <span className="check">✓</span>}
                                 </button>
                               ))}
@@ -492,6 +555,34 @@ export default function Translator({ onNotify }) {
                 </div>
               )}
             </div>
+
+            {/* شريط الإشارات الفعالة (Chips) */}
+            {sequence.length > 0 && (
+              <div className="sequence-box">
+                <div className="sequence-header">
+                  <span>الإشارات المتتابعة:</span>
+                  <span>{sequence.length} مقطع</span>
+                </div>
+                <div className="sequence-tokens">
+                  {sequence.map((item, idx) => (
+                    <div
+                      key={idx}
+                      className={`token-pill ${!mergedUrl && idx === currentIndex ? 'active' : ''}`}
+                      onClick={() => {
+                        if (!mergedUrl) {
+                          setCurrentIndex(idx);
+                        }
+                      }}
+                      title={`تشغيل إشارة: ${item.token}`}
+                      style={{ cursor: !mergedUrl ? 'pointer' : 'default' }}
+                    >
+                      <span>{item.token}</span>
+                      <span className="pill-type">{item.type === 'word' ? 'كلمة' : 'حرف'}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

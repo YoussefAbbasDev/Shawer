@@ -4,25 +4,29 @@ const reviewsData = [
   {
     name: 'سارة المنصوري',
     role: 'معلمة دمج وتخاطب',
-    img: '/imgs/avatars/user1.jpg',
+    img: '/imgs/avatars/user1.webp',
+    fallbackImg: '/imgs/avatars/user1.jpg',
     text: 'منصة شاور سهلت عملي مع الأطفال وضعاف السمع بشكل ملحوظ. أستطيع الآن كتابة أي قصة أو تدريب وتحويله لفيديو إشارة في ثوانٍ معدودة. خطوة رائدة فعلاً!'
   },
   {
     name: 'عمر عبد الرحمن',
     role: 'مهندس برمجيات',
-    img: '/imgs/avatars/user2.jpg',
+    img: '/imgs/avatars/user2.webp',
+    fallbackImg: '/imgs/avatars/user2.jpg',
     text: 'السرعة الفائقة وانعدام أي تأخير في تشغيل الإشارات المتتابعة جعل التجربة ممتعة جداً. دقة لغة الإشارة وترتيب الحروف استثنائي.'
   },
   {
     name: 'منى سعيد',
     role: 'أم لطفل أصم',
-    img: '/imgs/avatars/user3.jpg',
+    img: '/imgs/avatars/user3.webp',
+    fallbackImg: '/imgs/avatars/user3.jpg',
     text: 'شاور ساعدتنا في البيت على التواصل مع ابننا وتعلم لغة الإشارة معه بمتعة وبساطة. زر الإملاء الصوتي وفّر علينا ساعات طويلة من البحث.'
   },
   {
     name: 'د. طارق الشريف',
     role: 'باحث في التكنولوجيا المساعدة',
-    img: '/imgs/avatars/user4.jpg',
+    img: '/imgs/avatars/user4.webp',
+    fallbackImg: '/imgs/avatars/user4.jpg',
     text: 'مبادرة نوعية تخدم التحول الرقمي الشامل وتطبيق معايير الإتاحة وسهولة الوصول لذوي الإعاقة السمعية في العالم العربي. كل التقدير لهذا العمل المتميز.'
   }
 ];
@@ -41,7 +45,15 @@ export default function Reviews() {
           {reviewsData.map((review, idx) => (
             <div className="review-card" key={idx}>
               <div className="review-header">
-                <img src={review.img} alt={review.name} className="reviewer-img" />
+                <img
+                  src={review.img}
+                  alt={review.name}
+                  className="reviewer-img"
+                  onError={(e) => {
+                    e.currentTarget.src = review.fallbackImg;
+                  }}
+                  loading="lazy"
+                />
                 <div className="reviewer-info">
                   <h4>{review.name}</h4>
                   <span>{review.role}</span>
