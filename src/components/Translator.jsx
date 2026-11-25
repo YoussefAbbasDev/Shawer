@@ -347,20 +347,6 @@ export default function Translator({ onNotify }) {
                 <span>🤟</span>
                 <span>مشغل لغة الإشارة</span>
               </h3>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span className="badge-live" style={{ background: '#fff3eb', color: '#eb510f' }}>
-                  {mergeDuration !== null
-                    ? mergeDuration === '0.0'
-                      ? '⚡ تشغيل فوري (0.0 ث)'
-                      : `⏱ تم الدمج في ${mergeDuration} ث`
-                    : '⏱ في انتظار التحويل'}
-                </span>
-                {!mergedUrl && sequence.length > 0 && (
-                  <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#10b981' }}>
-                    ({currentIndex + 1} من {sequence.length})
-                  </span>
-                )}
-              </div>
             </div>
 
             {/* حاوية المشغل الفعلي */}
